@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Configs>
+	<Log>
+		<!-- 5个日志级别：DEBUG, INFO, WARNING, ERROR, CRITICAL -->
+		<Level>DEBUG</Level>	
+		<!-- 3个日志输出方式：CONSOLE, LOGFILE, DUAL -->
+		<Mode>DUAL</Mode>
+	</Log>
+
+	<Server>
+		<ServerIp>127.0.0.1</ServerIp>
+		<ServerTcpPort>8888</ServerTcpPort>
+	</Server>
+</Configs>
