@@ -10,6 +10,8 @@ const char *config_file = "../config/rail_safety.xml";
 //获取系统配置
 int load_sys_config()
 {
+    LogDebug("load system configs...\n");
+
     XmlParser config(config_file);
     if ( config.is_empty() ) 
     {
@@ -23,13 +25,15 @@ int load_sys_config()
         LogError("read config fail\n");
         return -1;
     }
+    LogDebug("config ServerIp: %s\n", g_sys_config.server_ip.c_str());
 
     //服务器端口
-    if ( config.get_ushort("Server", "ServerTcpPort", g_sys_config.server_port) != 0 )
+    if ( config.get_ushort("Server", "ServerTcpPort", g_sys_config.server_tcp_port) != 0 )
     {
         LogError("read config fail\n");
         return -1;
     }
+    LogDebug("config ServerTcpPort: %d\n", g_sys_config.server_tcp_port);
 
     //日志等级
     if ( config.get_string("Log", "Level", g_sys_config.log_level) != 0 )
@@ -37,6 +41,7 @@ int load_sys_config()
         LogError("read config fail\n");
         return -1;
     }
+    LogDebug("config LogLevel: %s\n", g_sys_config.log_level.c_str());
 
     //日志输出模式
     if ( config.get_string("Log", "Mode", g_sys_config.log_mode) != 0 )
@@ -44,6 +49,7 @@ int load_sys_config()
         LogError("read config fail\n");
         return -1;
     }
+    LogDebug("config LogMode: %s\n", g_sys_config.log_mode.c_str());
 
     return 0;
 }
@@ -60,7 +66,7 @@ int SystemInit(int argc, char** argv)
     }
 
     //日志设置
-    if ( log_config( g_sys_config.log_level, g_sys_config.log_mode, "../log" ) < 0 )
+    if ( log_init( g_sys_config.log_level, g_sys_config.log_mode, "../log" ) < 0 )
     {
         LogError("log_config error!\n");
         return -1;

@@ -44,7 +44,7 @@ int main()
     string mode;
     config.get_string("Log", "Mode", mode);
 
-    if ( log_config(level, mode, "../log/log.txt") < 0 )
+    if ( log_init(level, mode, "../log/log.txt") < 0 )
     {
         cout << "log config error" << endl;
         return -1;

@@ -10,10 +10,10 @@
 
 using namespace std;
 
-int intervel_time_0 = 10;
-int intervel_time_1 = 1;
+int intervel_time_0 = 1000;
+int intervel_time_1 = 1000;
 
-int g_frame_len = 1520;
+int g_frame_len = 10*1024;
 
 struct Param
 {
@@ -103,7 +103,7 @@ int reverse_frame(unsigned char *frame, unsigned short frame_len)
 int pack_frame(unsigned char type, unsigned char *buff)
 {
     int switch_count = 3266;
-    unsigned short switch_change_count = 0x9f;
+    unsigned short switch_change_count = 0x0f95;
     unsigned char frame_head = 0x01;
     unsigned short datalen = 0;
     unsigned short crc = 0;
@@ -127,8 +127,13 @@ int pack_frame(unsigned char type, unsigned char *buff)
         tmp += 2;
 
         //数据段
+
         unsigned char data_buff[datalen] = {0};
-        memset(data_buff, 0xff, datalen);
+        unsigned short value = 0x0101;
+        for( int i = 0; i < datalen; ++i )
+        {
+            data_buff[i] = value++;
+        }
         memcpy(tmp, &data_buff, sizeof(data_buff));
         tmp += datalen;
 
@@ -163,6 +168,7 @@ int pack_frame(unsigned char type, unsigned char *buff)
         unsigned short change_velue = 0xcaff;
         for( int i = 0; i < switch_change_count; ++i )
         {
+            change_velue += 0x0f;
             memcpy(tmp, &change_velue, sizeof(change_velue));
             tmp += 2;
         }
@@ -177,7 +183,7 @@ int pack_frame(unsigned char type, unsigned char *buff)
         memcpy(tmp, &frame_tail, sizeof(frame_tail));
     }
     else
-        cout << "save frame type" << endl;
+        LogWarning("the other frame type\n");
 
     LogPrint("转义前：\n");
     LogMemPrint(buff, datalen + 7);
@@ -194,7 +200,7 @@ void *send_data_thread_fn(void *args)
 {
     struct Param *arguments = (struct Param *)args;
     int cfd = arguments->fd;
-    unsigned char buff[1024] = {0};
+    unsigned char buff[g_frame_len] = {0};
 
     while(1)
     {
@@ -205,27 +211,28 @@ void *send_data_thread_fn(void *args)
         int ret = send(cfd, buff, frame_len, 0);
         if( ret < 0)
         {
-            cout << "connection interrupt: " << inet_ntoa(arguments->addr.sin_addr) << endl;
+            LogWarning("connection interrupt: %s\n", inet_ntoa(arguments->addr.sin_addr));
             free(arguments);
+            close(cfd);
             pthread_exit(NULL);
         }
 
-        sleep(intervel_time_1);
+        usleep(intervel_time_0);
 
         //发送开关量变化信息数据帧
         frame_len = pack_frame(0x12, buff);
         ret = send(cfd, buff, frame_len, 0);
         if(ret < 0)
         {
-            cout << "connection interrupt: " << inet_ntoa(arguments->addr.sin_addr) << endl;
+            LogWarning("connection interrupt: %s\n", inet_ntoa(arguments->addr.sin_addr));
             free(arguments);
+            close(cfd);
             pthread_exit(NULL);
         }
 
-        sleep(intervel_time_0);
+        usleep(intervel_time_0);
     }
 }
-
 
 int main()
 {
@@ -245,7 +252,7 @@ int main()
 
     if( bind(sfd, (struct sockaddr *)&seraddr, size) < 0 )
     {
-        cout << "bind fail" << endl;
+        LogError("bind fail\n");
         return -1;
     }
 
@@ -257,11 +264,13 @@ int main()
         memset(arguments, 0, sizeof(struct Param));
 
         arguments->fd = accept(sfd, (struct sockaddr *)&arguments->addr, &size);
-        cout << "accept a connection from: " << inet_ntoa(arguments->addr.sin_addr) << endl;
+        LogDebug("accept a connection from: %s\n", inet_ntoa(arguments->addr.sin_addr));
+
+        sleep(3);
 
         pthread_t pid = 0;
         if( pthread_create(&pid, 0, send_data_thread_fn, (void *)arguments) < 0 ) {
-            cout << "create send data thread fail!" << endl;
+            LogError("create send data thread fail!\n");
         }
         pthread_detach(pid);
     }

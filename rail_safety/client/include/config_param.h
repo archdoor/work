@@ -13,8 +13,8 @@ typedef struct ConfigParam
     string log_mode;
 
     // Server
-    unsigned short server_port;
-    std::string server_ip;
+    string server_ip;
+    unsigned short server_tcp_port;
 
 }config_param_t;
 

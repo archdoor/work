@@ -16,6 +16,29 @@
 #include "system.h"
 #include "log.h"
 
+//内存搜索
+int mem_search(unsigned char *membuff, int len, unsigned char byte)
+{
+    for( int i = 0; i < len ; ++i )
+    {
+        if ( membuff[i] == byte )
+            return ( i + 1 );
+    }
+    return 0;
+}
+
+//发送消息到消息队列
+int send_msgqueue(int msgid, struct Mess *msg, int msglen)
+{
+    msg->mtype = g_msgtype;
+    gettimeofday(&msg->time, NULL);
+    if( msgsnd(msgid, msg, msglen + sizeof(long) + sizeof(struct timeval), 0) != 0 ) 
+    {
+        LogWarning("msgsnd error!\n");
+        return -1;
+    }
+    return 0;
+}
 
 //计算CRC校验码：多项式 0x11021 X^16+X^12+X^5+1
 unsigned short calc_crc(unsigned char *data, int len)
@@ -65,6 +88,7 @@ DataRecever *DataRecever::get_instance()
 {
     if ( m_recever == NULL )
     {
+        LogDebug("get new recever instance\n");
         m_recever = new DataRecever();
     }
     return m_recever;
@@ -72,6 +96,8 @@ DataRecever *DataRecever::get_instance()
 
 int DataRecever::init()
 {
+    LogDebug("recever init...\n");
+
     //创建消息队列
     key_t msgkey = ftok(__FILE__, 200);
     m_msgid = msgget(msgkey, IPC_CREAT | 0644);
@@ -97,11 +123,15 @@ int DataRecever::init()
 //创建数据文件
 int DataRecever::create_data_file(struct timeval msg_time)
 {
-    char filename[20] = {0};
+    char filename[32] = {0};
     strftime(filename, sizeof(filename), "%Y-%m-%d_%H-%M-%S", localtime(&msg_time.tv_sec));
-    strcat(filename, ".data");
 
-    m_file = open(filename, O_CREAT | O_WRONLY | O_SYNC, 0766);
+    char pathname[64] = {0};
+    strcat(pathname, "../data/");
+    strcat(pathname, filename);
+    strcat(pathname, ".data");
+
+    m_file = open(pathname, O_CREAT | O_WRONLY | O_SYNC, 0766);
     if( m_file < 0 )
     {
         LogError("open data file failed!\n");
@@ -114,19 +144,25 @@ int DataRecever::create_data_file(struct timeval msg_time)
 //数据接收线程
 void *recv_thread_fn(void *args)
 {
-    DataRecever *recever = (DataRecever *)args;
-    Mess msg;
-    unsigned char *data_buff = msg.mtext;
-    int recv_len = 0;
+    LogDebug("start data recv thread\n");
 
+    DataRecever *recever = (DataRecever *)args;
+    Mess msg = {0};
+    unsigned char *data_buff = msg.mtext;
+    unsigned char tmp_buff[2048] = {0};
+    int frame_len = 0;
+
+    int head_flag = 0;
+    int first_flag = 1;
     while(1)
     {
-        memset(data_buff, 0, sizeof(msg.mtext));
-        recv_len = recv(recever->m_sock, data_buff, sizeof(msg.mtext) - 1, 0);
-        LogDebug("recv_len: %d\n", recv_len);
-        if( recv_len == 0 )
+        memset(tmp_buff, 0, sizeof(tmp_buff));
+        int recv_len = recv(recever->m_sock, tmp_buff, sizeof(tmp_buff) - 1, 0);
+        LogDebug("recv data len: %d\n", ret);
+        if( recv_len <= 0 )
         {
-            LogWarning("server outline!\n");
+            LogWarning("recv fail or server outline!\n");
+            close(recever->m_sock);
             if( recever->reconnect_srv() < 0 )
             {
                 LogError("reconnect server fail!\n");
@@ -134,18 +170,81 @@ void *recv_thread_fn(void *args)
             }
             else continue;
         }
-        else if( recv_len < 0 ) 
+        //判断帧头是否正确：不正确则直接弃包
+        if ( first_flag == 1 )
         {
-            LogError("recv error!\n");
+            if ( tmp_buff[0] == 0x01 )
+            {
+                head_flag = 1;
+            }
+            else
+                continue;
+        }
+        //检查帧尾
+        int tail = mem_search(tmp_buff, recv_len, 0x03);
+        if ( tail == 0 )
+        {
+            //继续接收
+            memcpy( data_buff + frame_len, tmp_buff, recv_len );
+            frame_len += recv_len;
+            first_flag = 0;
             continue;
         }
-
-        //将数据传送到消息队列
-        gettimeofday(&msg.time, NULL);
-        if( msgsnd(recever->m_msgid, &msg, recv_len + sizeof(long) + sizeof(struct timeval), 0) != 0 ) 
+        else if ( tail == recv_len )
         {
-            LogWarning("msgsnd error!\n");
+            if ( first_flag == 1 )
+            {
+                //直接挂到消息队列中
+                send_msgqueue(recever->m_msgid, &msg, frame_len);
+            }
+            else
+            {
+                memcpy( data_buff + frame_len, tmp_buff, recv_len );
+                frame_len += recv_len;
+                send_msgqueue(recever->m_msgid, &msg, frame_len);
+            }
         }
+        else
+        {
+            // 消息截取
+        }
+
+
+
+
+
+        if ( frame_len + ret >= g_data_max_len )
+        {
+            LogWarning("recv data too long: %d\n", frame_len + ret);
+        }
+        else
+        {
+            memcpy(data_buff + frame_len, tmp_buff, ret);
+            frame_len += ret;
+            if ( msg.mtext[0] == 0x01 )
+            {
+                if ( msg.mtext[frame_len - 1] != 0x03) {
+                    continue;
+                }
+                else
+                {
+                    LogDebug("recv all data len: %d\n", frame_len);
+                    //将数据传送到消息队列
+                    msg.mtype = g_msgtype;
+                    gettimeofday(&msg.time, NULL);
+                    if( msgsnd(recever->m_msgid, &msg, frame_len + sizeof(long) + sizeof(struct timeval), 0) != 0 ) 
+                    {
+                        LogWarning("msgsnd error!\n");
+                    }
+                }
+            }
+            else {
+                LogWarning("pack head is not 0x01\n");
+            }
+        }
+        //清空数据
+        frame_len = 0;
+        memset(msg.mtext, 0, sizeof(msg.mtext));
     }
     return NULL;
 }
@@ -211,60 +310,24 @@ int DataRecever::crc_check(unsigned char *frame, int frame_len)
 //数据保存线程
 void *save_thread_fn(void *args)
 {
+    LogDebug("start data save thread\n");
+
     DataRecever *recever = (DataRecever *)args;
-    Mess msg;
+    Mess msg = {0};
+    msg.mtype = g_msgtype;
 
     int msg_len = 0;
     while(1)
     {
         memset(msg.mtext, 0, sizeof(msg.mtext));
         msg_len = msgrcv(recever->m_msgid, &msg, sizeof(msg), msg.mtype, 0);
-        LogDebug("msg_len: %d\n", msg_len);
         if( msg_len < 0 )
         {
             LogError("msgrcv error!\n");
             break;
         }
 
-        int datalen = msg_len - sizeof(long) - sizeof(struct timeval);
-
-        //数据去转义字符
-        int frame_len = recever->del_reverse(msg.mtext, datalen);
-
-        //数据校验
-        if( recever->crc_check(msg.mtext, frame_len) < 0 )
-        {
-            LogError("CRC校验失败！\n");
-            continue;
-        }
-
-        //消息时间
-        char sdate[25] = {0};
-        strftime(sdate, sizeof(sdate), "%Y-%m-%d_%H:%M:%S", localtime(&msg.time.tv_sec));
-        strcat(sdate, "\r\n");
-
-        //数据转化为十六进制字符
-        char hex_buff[frame_len*2 + 2] = {0};
-        char *tmp = hex_buff;
-        for( int i = 0; i < frame_len; ++i )
-        {
-            sprintf(tmp, "%.2x", msg.mtext[i]);
-            tmp += 2;
-        }
-        memcpy(tmp, "\r\n", strlen("\r\n"));
-
-        //时间和数据写入文件
-        write(recever->m_file, sdate, strlen(sdate));
-        write(recever->m_file, hex_buff, frame_len*2 + 2);
-
-        //判断文件大小，过大则新建文件
-        struct stat filemsg = {0};
-        fstat(recever->m_file, &filemsg);
-        if( filemsg.st_size > g_data_file_size )
-        {
-            close(recever->m_file);
-            recever->create_data_file(msg.time);
-        }
+        recever->save_data_to_file( &msg, msg_len );
     }
 
     return NULL;
@@ -273,10 +336,13 @@ void *save_thread_fn(void *args)
 //开始数据接收与存储
 int DataRecever::start()
 {
+    LogDebug("recever start running\n");
+
     if( connect_srv() < 0 ) {
         LogError("connect to server failed!\n");
         return -1;
     }
+    LogDebug("recever connected to server\n");
 
     //创建数据接收线程
     pthread_t pid_recv = 0;
@@ -309,7 +375,7 @@ int DataRecever::connect_srv()
 
 	struct sockaddr_in seraddr={0};
 	seraddr.sin_family = AF_INET;
-	seraddr.sin_port = htons(g_sys_config.server_port);
+	seraddr.sin_port = htons(g_sys_config.server_tcp_port);
 	seraddr.sin_addr.s_addr = inet_addr(g_sys_config.server_ip.c_str());
 
 	socklen_t size = sizeof(struct sockaddr_in);
@@ -336,4 +402,56 @@ int DataRecever::reconnect_srv()
         }
     }
     return -1;
+}
+
+int DataRecever::save_data_to_file(struct Mess *msg, int msglen)
+{
+    int datalen = msglen - sizeof(long) - sizeof(struct timeval);
+    LogDebug("msgrcv raw data len: %d\n", datalen);
+
+    //数据去转义字符
+    int frame_len = del_reverse(msg->mtext, datalen);
+    LogDebug("del reverse data len: %d\n", frame_len);
+
+    //数据校验
+    if( crc_check(msg->mtext, frame_len) < 0 )
+    {
+        LogError("CRC校验失败！\n");
+        return -1;
+    }
+
+    //消息时间
+    char sdate[25] = {0};
+    strftime(sdate, sizeof(sdate), "%Y-%m-%d_%H:%M:%S", localtime(&msg->time.tv_sec));
+    strcat(sdate, "\r\n");
+
+    //数据转化为十六进制字符
+    char hex_buff[frame_len*2 + 2] = {0};
+    char *tmp = hex_buff;
+    for( int i = 0; i < frame_len; ++i )
+    {
+        sprintf(tmp, "%.2x", msg->mtext[i]);
+        tmp += 2;
+    }
+    memcpy(tmp, "\r\n", strlen("\r\n"));
+
+    //时间和数据写入文件
+    write(m_file, sdate, strlen(sdate));
+    write(m_file, hex_buff, frame_len*2 + 2);
+
+    //判断文件大小，过大则新建文件
+    struct stat filemsg = {0};
+    fstat(m_file, &filemsg);
+    if( filemsg.st_size > g_data_file_size )
+    {
+        close(m_file);
+        LogDebug("create new data file\n");
+        create_data_file(msg->time);
+    }
+    return 0;
+}
+
+int stop()
+{
+    return 0;
 }

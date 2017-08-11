@@ -4,7 +4,11 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <pthread.h>
 #include "log.h"
+
+//日志文件互斥锁
+static pthread_mutex_t log_mutex;
 
 //5个日志级别
 static string all_log_level[5] = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"};
@@ -34,8 +38,6 @@ int get_file_by_time(const char *path, const char *suffix, struct timeval *time 
     strcat(pathname, filename);
     strcat(pathname, suffix);
 
-    LogPrint("%s\n", pathname);
-
     int fd = open(pathname, O_CREAT | O_WRONLY | O_SYNC, 0755);
     if( fd < 0 )
     {
@@ -47,23 +49,31 @@ int get_file_by_time(const char *path, const char *suffix, struct timeval *time 
 }
 
 //日志打印设置
-int log_config(string level, string mode, const char *file_path = NULL)
+int log_init(string level, string mode, const char *file_path = NULL)
 {
     //设置日志文件
     if ( (mode == all_log_mode[1]) || (mode == all_log_mode[2]) )
     {
         if ( file_path == NULL )
         {
-            LogPrint("log file is NULL!\n");
+            LogError("log file path can't be NULL!\n");
             return -1;
         }
 
         g_log_fd = get_file_by_time("../log/", ".log");
         if ( g_log_fd < 0 )
         {
-            LogPrint("get_file_by_time error!\n");
+            LogError("get_file_by_time error!\n");
             return -1;
         }
+        LogDebug("get log file fd: %d\n", g_log_fd);
+
+        //初始化日志文件互斥锁
+        if (pthread_mutex_init(&log_mutex, NULL))
+        {   
+            LogError("failed to init log mutex!\n");
+            return -1;
+        }   
     }
     //设置日志等级
     for ( int i = 0; i < 5; ++i )
@@ -73,6 +83,7 @@ int log_config(string level, string mode, const char *file_path = NULL)
             g_log_level = i;
         }
     }
+    LogDebug("set log level: %d\n", g_log_level);
     //设置日志模式
     for ( int i = 0; i < 3; ++i )
     {
@@ -81,6 +92,7 @@ int log_config(string level, string mode, const char *file_path = NULL)
             g_log_mode = i;
         }
     }
+    LogDebug("set log mode: %d\n", g_log_mode);
 
     return 0;
 }
@@ -108,6 +120,9 @@ void log_print(int level, const char *fmt, ...)
     //日志文件写入
     if ( g_log_mode != LOG_CONSOLE )
     {
+        //获取互斥量
+        pthread_mutex_lock( &log_mutex );
+
         write(g_log_fd, fmt_sdate, strlen(fmt_sdate));
         string level_info = "[" + all_log_level[level] + "]";
         write(g_log_fd, level_info.c_str(), level_info.length());
@@ -125,6 +140,8 @@ void log_print(int level, const char *fmt, ...)
                 LogWarning("get_file_by_time error!\n");
             }
         }
+        //释放互斥量
+        pthread_mutex_unlock( &log_mutex );
 
         if ( g_log_mode == LOG_LOGFILE )
             return ;
